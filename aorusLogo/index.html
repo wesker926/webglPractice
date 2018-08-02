@@ -1,0 +1,583 @@
+﻿<!doctype html>
+<!-- saved from url=(0016)http://localhost -->
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="author" content="wesker(http://www.wesker926.com/)">
+    <title>index</title>
+
+    <style>
+        body {
+            background: #000000;
+            overflow: hidden;
+        }
+        #webgl {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            left: 0;
+            top: 0;
+            overflow: hidden;
+            background: #000000;
+        }
+        #webgl-canvas {
+            position: absolute;
+            margin:auto;
+            left: 0;
+            top: 0;
+            right: 0;
+            bottom: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="webgl">
+        <canvas id="webgl-canvas"></canvas>
+    </div>
+</body>
+</html>
+
+<script type="text/javascript" src="lib/cuon-matrix.js"></script>
+<script type="text/javascript" src="lib/stats.min.js"></script>
+
+<script type="text/javascript">
+"use strict";
+
+class Animate {
+  constructor() {
+    this.width = window.innerWidth;
+    this.height = window.innerHeight;
+    this.aspectRatio = this.width / this.height;
+
+    this.audioLeftFreqs = [];
+    this.audioRightFreqs = [];
+    this.audioFreqSum = 0;
+    this.audioFreqAvg = 0;
+
+    for(var i = 0;i < 64;i++) {
+      this.audioLeftFreqs.push(0);
+      this.audioRightFreqs.push(0);
+    }
+
+    this.createWebAudio('audio', 'static/Lyn - BREAK IN TO BREAK OUT.mp3');
+
+    //window.wallpaperRegisterAudioListener(this.wallpaperAudioListener.bind(this));
+
+    this.canvas = document.getElementById('webgl-canvas');
+    this.canvas.width = this.width;
+    this.canvas.height = this.height;
+
+    //添加FPS监控
+    this.createStats();
+    
+    this.animationFrameId = 0;
+
+    this.startTime = 0;
+    this.elapsedTime = 0;
+    this.deltaTime = 0;
+
+    this.gl = this.canvas.getContext('webgl');
+
+    this.shader = {
+      vertexShader: [
+        'attribute vec4 a_Position;',
+
+        'uniform mat4 u_ProjMatrix;',
+        'uniform mat4 u_ViewMatrix;',
+        'uniform mat4 u_ModelMatrix;',
+
+        'void main() {',
+        '  gl_Position = u_ProjMatrix * u_ViewMatrix * u_ModelMatrix * a_Position;',//注意这里是矩阵乘法，顺序不能颠倒
+        '}'
+      ].join('\n'),
+      fragmentShader: [
+        '#ifdef GL_FRAGMENT_PRECISION_HIGH',
+        'precision highp float;',
+        '#else',
+        'precision mediump float;',
+        '#endif',
+
+        'uniform vec2 u_Resolution;',
+        'uniform float u_Time;',
+        'uniform float u_EyePosX[4];',
+        'uniform float u_EyePosY[4];',
+        'uniform float u_LeftLogoPosX[35];',
+        'uniform float u_LeftLogoPosY[35];',
+        'uniform float u_RightLogoPosX[13];',
+        'uniform float u_RightLogoPosY[13];',
+        'uniform float u_LeftAudioLinePosX[65];',
+        'uniform float u_LeftAudioLinePosY[65];',
+        'uniform float u_RightAudioLinePosX[65];',
+        'uniform float u_RightAudioLinePosY[65];',
+        'uniform float u_LeftGlow[4];',
+        'uniform float u_RightGlow[4];',
+
+        'float dToLine(vec2 start, vec2 end, vec2 uv) {',
+        '  vec2 line = end - start;',
+        '  float frac = dot(uv - start, line) / dot(line, line);',
+        '  return distance(start + line * clamp(frac, 0.0, 1.0), uv);',
+        '}',
+
+        'float dForEye(vec2 uv) {',
+        '  float dist = 1e6;',
+        '  for(int i = 0;i < 3;i++) {',
+        '    dist = min(dist, dToLine(vec2(u_EyePosX[i], u_EyePosY[i]), vec2(u_EyePosX[i+1], u_EyePosY[i+1]), uv));',
+        '  }',
+        '  return dist;',
+        '}',
+
+        'float dForLeftLogo(vec2 uv) {',
+        '  float dist = 1e6;',
+        '  for(int i = 0;i < 34;i++) {',
+        '    dist = min(dist, dToLine(vec2(u_LeftLogoPosX[i], u_LeftLogoPosY[i]), vec2(u_LeftLogoPosX[i+1], u_LeftLogoPosY[i+1]), uv));',
+        '  }',
+        '  return dist;',
+        '}',
+
+        'float dForRightLogo(vec2 uv) {',
+        '  float dist = 1e6;',
+        '  for(int i = 0;i < 12;i++) {',
+        '    dist = min(dist, dToLine(vec2(u_RightLogoPosX[i], u_RightLogoPosY[i]), vec2(u_RightLogoPosX[i+1], u_RightLogoPosY[i+1]), uv));',
+        '  }',
+        '  return dist;',
+        '}',
+
+        'float dForLeftLine(vec2 uv) {',
+        '  float dist = 1e6;',
+        '  for(int i = 0;i < 64;i++) {',
+        '    dist = min(dist, dToLine(vec2(u_LeftAudioLinePosX[i], u_LeftAudioLinePosY[i]), vec2(u_LeftAudioLinePosX[i+1], u_LeftAudioLinePosY[i+1]), uv));',
+        '  }',
+        '  return dist;',
+        '}',
+
+        'float dForRightLine(vec2 uv) {',
+        '  float dist = 1e6;',
+        '  for(int i = 0;i < 64;i++) {',
+        '    dist = min(dist, dToLine(vec2(u_RightAudioLinePosX[i], u_RightAudioLinePosY[i]), vec2(u_RightAudioLinePosX[i+1], u_RightAudioLinePosY[i+1]), uv));',
+        '  }',
+        '  return dist;',
+        '}',
+
+        'float hueToRgb(float p, float q, float t) {',
+        '  float result = 0.0;',
+        '  if(t < 0.0) {',
+        '    t += 1.0;',
+        '  }',
+        '  if(t > 1.0) {',
+        '    t -= 1.0;',
+        '  }',
+        '  if(t < 1.0 / 6.0) {',
+        '    result = p + (q - p) * 6.0 * t;',
+        '  }',
+        '  else if(t < 1.0 / 2.0) {',
+        '    result = q;',
+        '  }',
+        '  else if(t < 2.0 / 3.0) {',
+        '    result = p + (q - p) * (2.0 / 3.0 - t) * 6.0;',
+        '  }',
+        '  else {',
+        '    result = p;',
+        '  }',
+        '  return result;',
+        '}',
+
+        'vec3 hslToRgb(vec3 hsl) {',
+        '  vec3 rgb = vec3(0.0);',
+        '  if(hsl.y == 0.0) {',
+        '    rgb = vec3(hsl.z);',
+        '  }',
+        '  else {',
+        '    float q = hsl.z < 0.5 ? hsl.z * (1.0 + hsl.y) : hsl.z + hsl.y - hsl.z * hsl.y;',
+        '    float p = 2.0 * hsl.z - q;',
+        '    rgb.x = hueToRgb(p, q, hsl.x + 1.0 / 3.0);',
+        '    rgb.y = hueToRgb(p, q, hsl.x);',
+        '    rgb.z = hueToRgb(p, q, hsl.x - 1.0 / 3.0);',
+        '  }',
+        '  return rgb;',
+        '}',
+
+        'float getShade(float d) {',
+        '  return 0.0015 / pow(max(5e-4, d - 0.0002), 0.9);',
+        '}',
+
+        'void main() {',
+        '  vec2 uv = gl_FragCoord.xy / u_Resolution.y;',
+
+        '  vec3 baseColor = hslToRgb(vec3((sin(u_Time * 0.5 + uv.x * 0.2) + 1.0) * 0.5, 1.0, 0.5));',
+        '  float dist = 0.0;',
+        '  float shade = 0.0;',
+        '  vec3 color = vec3(0.0);',
+
+        '  dist = dForEye(uv);',
+        '  dist = min(dist, dForLeftLogo(uv));',
+        '  dist = min(dist, dForLeftLine(uv));',
+        '  shade = getShade(dist);',
+        '  color += baseColor * shade;',
+
+        '  dist = dForRightLogo(uv);',
+        '  dist = min(dist, dForRightLine(uv));',
+        '  shade = getShade(dist);',
+        '  color += baseColor * shade;',
+
+        /*'  dist = dToLine(vec2(u_LeftGlow[0], u_LeftGlow[1]), vec2(u_LeftGlow[2], u_LeftGlow[3]), uv);',
+        '  shade = getShade(dist);',
+        '  color += baseColor * shade;',
+
+        '  dist = dToLine(vec2(u_RightGlow[0], u_RightGlow[1]), vec2(u_RightGlow[2], u_RightGlow[3]), uv);',
+        '  shade = getShade(dist);',
+        '  color += baseColor * shade;',*/
+
+        'color += baseColor * 0.04 / pow((abs(uv.y - 0.5) + 0.5), 2.0);',
+
+        '  gl_FragColor = vec4(color, 1.0);',
+        '}'
+      ].join('\n')
+    };
+
+    this.init();
+  }
+
+  init() {
+    this.initWebGL(this.gl, this.shader.vertexShader, this.shader.fragmentShader);
+    this.initVertexInfoBuffers();
+
+    this.gl.clearColor(0.0, 0.0, 0.0, 0.0);
+
+    this.u_ProjMatrix = this.gl.getUniformLocation(this.gl.program, 'u_ProjMatrix');
+    this.u_ViewMatrix = this.gl.getUniformLocation(this.gl.program, 'u_ViewMatrix');
+    this.u_ModelMatrix = this.gl.getUniformLocation(this.gl.program, 'u_ModelMatrix');
+
+    this.u_Resolution = this.gl.getUniformLocation(this.gl.program, 'u_Resolution');
+    this.u_Time = this.gl.getUniformLocation(this.gl.program, 'u_Time');
+
+    this.u_EyePosX = this.gl.getUniformLocation(this.gl.program, 'u_EyePosX');
+    this.u_EyePosY = this.gl.getUniformLocation(this.gl.program, 'u_EyePosY');
+
+    this.u_LeftLogoPosX = this.gl.getUniformLocation(this.gl.program, 'u_LeftLogoPosX');
+    this.u_LeftLogoPosY = this.gl.getUniformLocation(this.gl.program, 'u_LeftLogoPosY');
+
+    this.u_RightLogoPosX = this.gl.getUniformLocation(this.gl.program, 'u_RightLogoPosX');
+    this.u_RightLogoPosY = this.gl.getUniformLocation(this.gl.program, 'u_RightLogoPosY');
+
+    this.u_LeftAudioLinePosX = this.gl.getUniformLocation(this.gl.program, 'u_LeftAudioLinePosX');
+    this.u_LeftAudioLinePosY = this.gl.getUniformLocation(this.gl.program, 'u_LeftAudioLinePosY');
+
+    this.u_RightAudioLinePosX = this.gl.getUniformLocation(this.gl.program, 'u_RightAudioLinePosX');
+    this.u_RightAudioLinePosY = this.gl.getUniformLocation(this.gl.program, 'u_RightAudioLinePosY');
+
+    /*this.u_LeftGlow = this.gl.getUniformLocation(this.gl.program, 'u_LeftGlow');
+    this.u_RightGlow = this.gl.getUniformLocation(this.gl.program, 'u_RightGlow');*/
+
+    this.eyePos = {
+      x: 0.0,
+      y: 0.0,
+      z: 1.0
+    };
+
+    this.tarPos = {
+      x: 0,
+      y: 0,
+      z: 0
+    };
+
+    this.upVector = {
+      x: 0,
+      y: 1,
+      z: 0
+    };
+
+    this.projMatrix = new Matrix4();
+    this.projMatrix.setOrtho(-1.0 * this.aspectRatio, 1.0 * this.aspectRatio, -1.0, 1.0, 0.0, 10.0);//设置正射投影矩阵：左、右、底、上、近、远
+    this.viewMatrix = new Matrix4();
+    this.viewMatrix.setLookAt(this.eyePos.x, this.eyePos.y, this.eyePos.z, this.tarPos.x, this.tarPos.y, this.tarPos.z, this.upVector.x, this.upVector.y, this.upVector.z);//视点，目标点，上方向
+    this.modelMatrix = new Matrix4();
+    this.modelMatrix.setIdentity();
+
+    this.gl.uniformMatrix4fv(this.u_ProjMatrix, false, this.projMatrix.elements);
+    this.gl.uniformMatrix4fv(this.u_ViewMatrix, false, this.viewMatrix.elements);
+    this.gl.uniformMatrix4fv(this.u_ModelMatrix, false, this.modelMatrix.elements);
+
+    this.gl.uniform2fv(this.u_Resolution, new Float32Array([this.width, this.height]));
+    this.gl.uniform1f(this.u_Time, 0.0);
+
+    this.eyePosX = new Float32Array([0.938425926, 0.961574074, 0.981944444, 0.938425926]);
+    this.eyePosY = new Float32Array([0.60462963, 0.597685185, 0.621296296, 0.60462963]);
+
+    this.leftLogoPosX = new Float32Array([
+      0.726851852, 0.787037037, 0.804166667, 0.80462963,  0.801388889, 0.933333333, 1.000462963, 1.013425926, 1.015740741,
+      1.01712963,  1.018055556, 1.017592593, 1.024537037, 1.028240741, 1.028703704, 1.025925926, 1.023611111, 1.02037037,
+      1.017592593, 0.981944444, 0.961574074, 0.957407407, 0.763425926, 0.7625,      0.773148148, 0.781944444, 0.781944444,
+      0.743055556, 0.751388889, 0.774074074, 0.792592593, 0.799074074, 0.768055556, 0.780555556, 0.787037037
+      ]);
+    this.leftLogoPosY = new Float32Array([
+      0.5,         0.5,         0.491203704, 0.452314815, 0.4125,      0.541666667, 0.60787037,  0.618981481, 0.619444444,
+      0.618055556, 0.614814815, 0.6,         0.615740741, 0.624537037, 0.629166667, 0.633333333, 0.635648148, 0.636574074,
+      0.636574074, 0.621296296, 0.626851852, 0.626851852, 0.549074074, 0.547685185, 0.545833333, 0.543981481, 0.54212963,
+      0.526388889, 0.526851852, 0.525462963, 0.519907407, 0.515740741, 0.502777778, 0.502314815, 0.5
+      ]);
+
+    this.rightLogoPosX = new Float32Array([
+      1.050925926, 0.897685185, 0.821296296, 0.817592593, 0.843055556,
+      0.873148148, 1.000462963, 0.986111111, 0.948148148, 0.97037037,
+      0.888888889, 0.878240741, 0.897685185
+      ]);
+    this.rightLogoPosY = new Float32Array([
+      0.5,         0.5,         0.424074074, 0.405092593, 0.384259259,
+      0.366203704, 0.467592593, 0.487962963, 0.481018519, 0.471759259,
+      0.428240741, 0.436111111, 0.5
+      ]);
+
+    /*this.leftGlow = new Float32Array([this.leftLogoPosX[1], this.leftLogoPosY[1], this.leftLogoPosX[2], this.leftLogoPosY[2]]);
+    this.rightGlow = new Float32Array([this.rightLogoPosX[1], this.rightLogoPosY[1], this.rightLogoPosX[2], this.rightLogoPosY[2]]);*/
+
+    this.leftAudioLinePosX = new Float32Array(65);
+    this.leftAudioLinePosY = new Float32Array(65);
+    this.rightAudioLinePosX = new Float32Array(65);
+    this.rightAudioLinePosY = new Float32Array(65);
+
+    this.offsetX = (this.aspectRatio - (16 / 9)) / 2;
+    for(var i = 0;i < this.eyePosX.length;i++) {
+      this.eyePosX[i] += this.offsetX;
+    }
+    for(var i = 0;i < this.leftLogoPosX.length;i++) {
+      this.leftLogoPosX[i] += this.offsetX;
+    }
+    for(var i = 0;i < this.rightLogoPosX.length;i++) {
+      this.rightLogoPosX[i] += this.offsetX;
+    }
+
+    for(var i = 0;i < 65;i++) {
+      var temp = this.leftLogoPosX[0] / 64 * i;
+      this.leftAudioLinePosX[i] = temp;
+      this.leftAudioLinePosY[i] = 0.5;
+      this.rightAudioLinePosX[i] = this.aspectRatio - temp;
+      this.rightAudioLinePosY[i] = 0.5;
+    }
+
+    this.gl.uniform1fv(this.u_EyePosX, this.eyePosX);
+    this.gl.uniform1fv(this.u_EyePosY, this.eyePosY);
+
+    this.gl.uniform1fv(this.u_LeftLogoPosX, this.leftLogoPosX);
+    this.gl.uniform1fv(this.u_LeftLogoPosY, this.leftLogoPosY);
+
+    this.gl.uniform1fv(this.u_RightLogoPosX, this.rightLogoPosX);
+    this.gl.uniform1fv(this.u_RightLogoPosY, this.rightLogoPosY);
+
+    this.gl.uniform1fv(this.u_LeftAudioLinePosX, this.leftAudioLinePosX);
+    this.gl.uniform1fv(this.u_LeftAudioLinePosY, this.leftAudioLinePosY);
+
+    this.gl.uniform1fv(this.u_RightAudioLinePosX, this.rightAudioLinePosX);
+    this.gl.uniform1fv(this.u_RightAudioLinePosY, this.rightAudioLinePosY);
+
+    /*this.gl.uniform1fv(this.u_LeftGlow, this.leftGlow);
+    this.gl.uniform1fv(this.u_RightGlow, this.rightGlow);*/
+
+    this.start();
+  }
+
+  start() {
+    this.startTime = Date.now();
+    this.animationFrameId = requestAnimationFrame(this.loop.bind(this));
+  }
+
+  loop() {
+    this.animationFrameId = requestAnimationFrame(this.loop.bind(this));
+    this.stats.update();
+    
+    this.update();
+    this.draw();
+  }
+
+  update() {
+    var tempTime = Date.now() - this.startTime;
+    this.deltaTime = tempTime - this.elapsedTime;
+    this.elapsedTime = tempTime;//单位是ms
+
+    this.gl.uniform1f(this.u_Time, this.elapsedTime * 0.001);//单位是s
+
+    this.updateAudioData();
+
+    for(var i = 0;i < 64;i++) {
+      this.leftAudioLinePosY[i] = 0.5 + (i % 2 == 0 ? this.audioLeftFreqs[i] : -this.audioLeftFreqs[i]) * 0.2;
+      this.rightAudioLinePosY[i] = 0.5 + (i % 2 == 1 ? this.audioRightFreqs[i] : -this.audioRightFreqs[i]) * 0.2;
+
+      this.leftAudioLinePosY[i] = this.leftAudioLinePosY[i] < 0.2 ? 0.2 : this.leftAudioLinePosY[i];
+      this.leftAudioLinePosY[i] = this.leftAudioLinePosY[i] > 0.8 ? 0.8 : this.leftAudioLinePosY[i];
+
+      this.rightAudioLinePosY[i] = this.rightAudioLinePosY[i] < 0.2 ? 0.2 : this.rightAudioLinePosY[i];
+      this.rightAudioLinePosY[i] = this.rightAudioLinePosY[i] > 0.8 ? 0.8 : this.rightAudioLinePosY[i];
+    }
+
+    this.gl.uniform1fv(this.u_LeftAudioLinePosY, this.leftAudioLinePosY);
+    this.gl.uniform1fv(this.u_RightAudioLinePosY, this.rightAudioLinePosY);
+
+    /*var num1 = Math.floor((this.elapsedTime * 0.09) % 33 + 1);
+    var num2 = num1 % 33 + 1;
+    this.leftGlow = new Float32Array([this.leftLogoPosX[num1], this.leftLogoPosY[num1], this.leftLogoPosX[num2], this.leftLogoPosY[num2]]);
+
+    num1 = Math.floor((this.elapsedTime * 0.03) % 11 + 1);
+    num2 = num1 % 11 + 1;
+    this.rightGlow = new Float32Array([this.rightLogoPosX[num1], this.rightLogoPosY[num1], this.rightLogoPosX[num2], this.rightLogoPosY[num2]]);
+
+    this.gl.uniform1fv(this.u_LeftGlow, this.leftGlow);
+    this.gl.uniform1fv(this.u_RightGlow, this.rightGlow);*/
+  }
+
+  draw() {
+    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+    this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, this.n);
+  }
+
+  createStats() {
+    //FPS监控
+    this.stats = new Stats();
+    this.stats.setMode(0);
+    this.stats.domElement.style.position = 'absolute';
+    this.stats.domElement.style.left = '0';
+    this.stats.domElement.style.top = '0';
+    document.body.appendChild(this.stats.domElement);
+  }
+
+  createWebAudio(type, path) {
+    //基于web audio api
+    this.fftSize = 128;
+    this.webAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    this.webAnalyser = this.webAudioCtx.createAnalyser();
+    this.webAudio = document.createElement(type);
+    this.webAudio.src = path;
+    this.webAudio.autoplay = true;
+    this.webAudio.loop = true;
+    this.webSource = this.webAudioCtx.createMediaElementSource(this.webAudio);
+    this.webSource.connect(this.webAnalyser);
+    this.webAnalyser.connect(this.webAudioCtx.destination);
+    this.webAnalyser.fftSize = this.fftSize;
+    this.webTDataArray = new Uint8Array(this.fftSize);
+    this.webFDataArray = new Uint8Array(this.fftSize);
+    this.webAnalyser.getByteTimeDomainData(this.webTDataArray);
+    this.webAnalyser.getByteFrequencyData(this.webFDataArray);
+  }
+
+  updateAudioData() {
+    //this.audioDataAvg = this.audioAnalyser.getAverageFrequency();
+    //this.audioDatas = this.audioAnalyser.getFrequencyData();
+
+    this.webAnalyser.getByteTimeDomainData(this.webTDataArray);
+    console.log(this.webFDataArray);
+    this.webAnalyser.getByteFrequencyData(this.webFDataArray);
+
+    for(var i = 0;i < 64;i++) {
+      this.audioLeftFreqs[i] = this.webFDataArray[i] * (1 / 255);
+      this.audioRightFreqs[i] = this.webFDataArray[i] * (1 / 255);
+    }
+  }
+
+  initWebGL(gl, vshader, fshader) {
+    //初始化webgl系统。gl上下文一致，可以不作为参数传递（这里为了方便仍旧作为参数传递）。着色器和程序对象可能不唯一，需要作为参数传递。
+    var program = this.createWebGLProgram(gl, vshader, fshader);
+    if(!program) {
+      console.log('Failed to init WebGL System because the program is wrong.');
+      return false;
+    }
+
+    gl.useProgram(program);
+    gl.program = program;
+    return true;
+  }
+
+  createWebGLProgram(gl, vshader, fshader) {
+    //创建webgl的程序对象
+    var vertexShader = this.loadShader(gl, gl.VERTEX_SHADER, vshader);
+    var fragmentShader = this.loadShader(gl, gl.FRAGMENT_SHADER, fshader);
+
+    if(!vertexShader || !fragmentShader) {
+      console.log('Unable to create program because the shaders are wrong.');
+      return null;
+    }
+
+    var program = gl.createProgram();
+    if(!program) {
+      console.log('Unable to create program.');
+      return null;
+    }
+
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+
+    gl.linkProgram(program);
+
+    var linked = gl.getProgramParameter(program, gl.LINK_STATUS);
+    if(!linked) {
+      var error = gl.getProgramInfoLog(program);
+      console.log('Failed to link program: ' + error);
+      gl.deleteProgram(program);
+      gl.deleteShader(fragmentShader);
+      gl.deleteShader(vertexShader);
+      return null;
+    }
+
+    return program;
+  }
+
+  loadShader(gl, type, source) {
+    //创建，载入，编译着色器对象
+    var shader = gl.createShader(type);
+    if(shader == null) {
+      console.log('Unable to create shader.');
+      return null;
+    }
+
+    gl.shaderSource(shader, source);
+
+    gl.compileShader(shader);
+
+    var compiled = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+    if(!compiled) {
+      var error = gl.getShaderInfoLog(shader);
+      console.log('Failed to compile shader: ' + error);
+      gl.deleteShader(shader);
+      return null;
+    }
+
+    return shader;
+  }
+
+  initVertexInfoBuffers() {
+    this.verticesInfo = new Float32Array(
+      //坐标-3分量
+      [
+        -1.0 * this.aspectRatio,  1.0, 0.0,
+         1.0 * this.aspectRatio,  1.0, 0.0,
+        -1.0 * this.aspectRatio, -1.0, 0.0,
+         1.0 * this.aspectRatio, -1.0, 0.0
+      ]
+      );
+    this.FSIZE = this.verticesInfo.BYTES_PER_ELEMENT;//每元素占字节数
+    this.pointCt = 3;//点总分量数
+    this.pointPosCt = 3;//点坐标分量数
+    this.n = this.verticesInfo.length / this.pointCt;//顶点数
+
+    this.vertexBuffer = this.gl.createBuffer();//创建缓冲区对象
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);//绑定缓冲区对象
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, this.verticesInfo, this.gl.STATIC_DRAW);//向缓冲区写入数组
+
+    this.a_Position = this.gl.getAttribLocation(this.gl.program, 'a_Position');
+    this.gl.vertexAttribPointer(this.a_Position, this.pointPosCt, this.gl.FLOAT, false, 0, 0);//将缓冲区分配给标签
+    this.gl.enableVertexAttribArray(this.a_Position);//使标签可用
+  }
+
+  /*wallpaperAudioListener(audioArray){
+    //注：audioArray是一个128元素数组，浮点数，前64个左声道，后64个右声道，频率由高到低。
+    this.audioLeftFreqs = audioArray.slice(0,64);
+    this.audioRightFreqs = audioArray.slice(64,128);
+    this.audioFreqSum = audioArray.reduce(function(pre,cur){
+        return pre+cur;
+    },0);
+    this.audioFreqAvg = audioFreqSum/128;
+  }*/
+}
+
+window.onload = function() {
+  var animate = new Animate();
+}
+
+</script>
